@@ -1,0 +1,3 @@
+---
+ssl_key: /etc/ssl/default.key
+ssl_crt: /etc/ssl/default.crt

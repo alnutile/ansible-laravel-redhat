@@ -1,0 +1,174 @@
+---
+- hosts: serverprod
+
+  tasks:
+#   - name: Install Repo 1 for 6
+#     yum: name=http://download.fedoraproject.org/pub/epel/6/i386/epel-release-6-8.noarch.rpm state=installed
+
+- hosts: local:serverstage
+
+#  tasks:
+#   - name: Install Repo 1 centos 7
+#     yum: name=http://rpms.famillecollet.com/enterprise/remi-release-7.rpm state=installed
+
+- hosts: local:serverstage:serverprod
+  vars:
+    - docroot: /var/www/public
+    - github_token: some_key_here
+
+  tasks:
+   - name: Cron Setup
+     cron: name="run scheduler" job="/usr/bin/php /var/www/public/artisan schedule:run 1>> /dev/null 2>&1" user={{ user }}
+
+   - name: Install Repo 1 centos 7
+     yum: name=http://rpms.famillecollet.com/enterprise/remi-release-7.rpm state=installed
+
+   - name: Install Vim
+     yum: pkg=vim state=installed
+
+   - name: Install SuperVisorD
+     yum: pkg=supervisor state=installed
+
+   - name: Install Nginx
+     yum: pkg=nginx state=installed
+     register: nginxinstalled
+
+   - name:  Nginx at Boot
+     sudo: yes
+     command: /bin/systemctl enable nginx
+
+   - name: Setup Folder
+     when: nginxinstalled|success
+     sudo: yes
+     register: webfolderready
+     file: dest={{ docroot }} mode=775 state=directory owner={{ user }} group=nginx force=yes
+
+   - name: Copy Nginx Conf
+     when: nginxinstalled|success
+     sudo: yes
+     copy: src=templates/nginx.conf dest=/etc/nginx/nginx.conf owner=root group=root force=yes
+
+   - name: Copy SSL over
+     when: nginxinstalled|success
+     sudo: yes
+     copy: src=templates/ssl dest=/etc/nginx/ owner=root group=root force=yes
+
+   - name: Copy Default Site Template
+     when: nginxinstalled|success
+     sudo: yes
+     copy: src=templates/default.conf.j2 dest=/etc/nginx/conf.d/default.conf owner=root group=root force=yes
+
+   - name: install packages
+     yum: name={{ item }} state=installed enablerepo="remi,remi-php56"
+     with_items:
+       - git
+       - php-common
+       - php-mbstring
+       - php-fpm
+       - php-cli
+       - php-mysql
+       - php-opcache
+       - php-mcrypt
+       - php-gd
+       - php-theseer-fDOMDocument
+       - php-symfony-dom-crawler 
+       - php-soap
+      
+   - name: Start setting up niginx
+     when: webfolderready|success
+     sudo: yes
+     command: "{{ item }}"
+     with_items:
+       - "/usr/bin/sudo /usr/bin/chmod g+x {{ docroot }}"
+       - "/usr/bin/sudo /usr/bin/chmod 775 {{ docroot }}"
+
+   - name: Install Composer
+     sudo: yes
+     shell: cd && /usr/bin/curl -sS https://getcomposer.org/installer | /usr/bin/php && mv composer.phar /usr/bin/composer
+
+   - name: NPM
+     sudo: yes
+     yum: pkg=npm
+
+   - name: Install Bower
+     sudo: yes
+     command: /bin/npm install --global bower
+
+   - name: Install Gulp
+     sudo: yes
+     command: /bin/npm install --global gulp@3.8
+
+   - name: Setup Git to deal with security that does not allow ssh
+     sudo: yes
+     command: /bin/git config --global url."https://".insteadOf git://
+
+   - name: Setup Composer Token
+     command: /usr/bin/composer config -g github-oauth.github.com {{ github_token }}
+
+   - name: Copy php.ini fix security issues
+     when: nginxinstalled|success
+     sudo: yes
+     copy: src=templates/php.ini dest=/etc/php.ini owner=root group=root force=yes
+
+   - name: Copy www.conf fix security issues
+     when: nginxinstalled|success
+     sudo: yes
+     register: phpfpmready
+     template: src=templates/www.conf.j2 dest=/etc/php-fpm.d/www.conf owner=root group=root force=yes
+
+   - name: Enable PHP FPM
+     when: phpfpmready|success
+     sudo: yes
+     command: "/bin/systemctl enable php-fpm"
+
+   - name: Start PHP FPM
+     sudo: yes
+     command: "/bin/systemctl start php-fpm"
+     notify: 
+       - Reload Nginx
+
+   - name: Setup php-fpm sock    
+     when: nginxinstalled|success
+     sudo: yes
+     file: path=/var/run/php-fpm/php-fpm.sock state=touch owner={{ user }} group=nginx force=yes mode="u+rwx,g-wxx,o-rx"
+
+   - name: Setup up SuperVisor  
+     sudo: yes
+     copy: src={{ item.src }} dest=/etc/supervisord.d/{{ item.name }} owner=root group=root force=yes
+     with_items:
+       - { src: "templates/queue-listener-default.conf.j2", name: "queue-listener-default.ini" }
+
+   - name: Enable systemctl
+     sudo: yes
+     command: "/bin/systemctl enable supervisord"
+
+   - name: Start systemctl
+     sudo: yes
+     command: "/bin/systemctl start supervisord"
+     notify: 
+       - reread supervisord config
+
+   - name: Make sure session php folder has correct perms
+     sudo: yes
+     file: dest=/var/lib/php mode=0770 state=directory owner={{ user }} group=nginx force=yes
+
+   - name: Allow HTTP to Connect to Mysql 1
+     sudo: yes
+     command: "/usr/sbin/setsebool -P httpd_can_network_memcache 1"
+
+   - name: Allow HTTP to Connect to Mysql 2
+     sudo: yes
+     command: "/usr/sbin/setsebool -P httpd_can_network_connect_db 1"
+
+  handlers:
+   - name: Start Nginx
+     service: name=nginx state=started
+
+   - name: Reload Nginx
+     service: name=nginx state=reloaded
+
+   - name: Reload PHP php56 
+     service: name=php-fpm state=restart
+
+   - name: reread supervisord config
+     shell: /bin/supervisorctl reread

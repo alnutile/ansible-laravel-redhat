@@ -1,0 +1,33 @@
+---
+- hosts: local
+  vars:
+    - user: centos
+
+  tasks:
+   - name: Copy SSHD over
+     sudo: yes
+     copy: src=templates/sshd_config dest=/etc/ssh/sshd_config owner=root group=root force=yes
+     notify:
+      - Restart SSHD
+
+   - name: Setup Sudoer
+     sudo: yes
+     lineinfile: "dest=/etc/sudoers state=present regexp='^%wheel' line='%wheel ALL=(ALL) NOPASSWD: ALL'"
+
+   - name:  Stop Firewall
+     sudo: yes
+     command: /bin/systemctl stop firewalld
+
+   - name:  Disable Firewall
+     sudo: yes
+     command: /bin/systemctl disable firewalld
+
+   - name: Set up authorized_keys for the deploy user
+     authorized_key: user={{ users }} key="{{ item }}"
+     with_file:
+       - public_keys/id_rsa.pub
+
+  handlers:
+   - name: Restart SSHD
+     service: name=sshd state=started
+
