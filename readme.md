@@ -28,12 +28,6 @@ ansible-playbook --limit local -s centos.yml -u centos -k --ask-sudo-pass --extr
 
 To the request so it will not hang at Gathering data
 
-
-Still might need more work
-
-  1) Locks at gethering data cause I need to setup sudo to ask first for password then it might work
-
-
 ## Setting up Nginx on the servers
 
 `cd server_config/ansible`
